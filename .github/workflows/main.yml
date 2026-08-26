@@ -2,8 +2,8 @@ import requests
 import datetime
 import os
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+BOT_TOKEN = os.getenv("8611119308:AAHWk73wYo0-fdzSDSQi7gNeybr6ShMgbws")
+CHAT_ID = os.getenv("7176458499")
 
 prev_sjc_buy = 0
 prev_sjc_sell = 0
