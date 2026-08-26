@@ -1,0 +1,25 @@
+name: Giá Xăng Dầu Hàng Ngày
+
+on:
+  schedule:
+    - cron: '30 1 * * *'   # 8h30 Việt Nam (UTC+7 = -7h → 1h30 UTC)
+    - cron: '30 8 * * *'   # 15h30 Việt Nam (UTC+7 = -7h → 8h30 UTC)
+  workflow_dispatch:
+
+jobs:
+  send-fuel-price:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tải code
+        uses: actions/checkout@v4
+      
+      - name: Cài Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Cài thư viện
+        run: pip install requests
+      
+      - name: Chạy bot
+        run: python fuel_bot.py
