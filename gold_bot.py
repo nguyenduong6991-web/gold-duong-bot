@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo
 # CẤU HÌNH
 # =====================================================
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+BOT_TOKEN = os.getenv("8611119308:AAHWk73wYo0-fdzSDSQi7gNeybr6ShMgbws")
+CHAT_ID = os.getenv("7176458499")
 
 # API key giá dầu thế giới
 # Đăng ký API Ninjas rồi đặt biến môi trường API_NINJAS_KEY
