@@ -1,677 +1,474 @@
 import requests
-import datetime
-import os
 import json
+import os
+import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
-# ============================================================
+# =====================================================
 # CẤU HÌNH
-# ============================================================
+# =====================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# File lưu giá lần trước
-DATA_FILE = "gold_previous.json"
+# API key giá dầu thế giới
+# Đăng ký API Ninjas rồi đặt biến môi trường API_NINJAS_KEY
+API_NINJAS_KEY = os.getenv("API_NINJAS_KEY")
 
+# Giá USD/VND
+USD_VND = 26000
 
-# ============================================================
-# ĐỊNH DẠNG SỐ
-# ============================================================
+DATA_FILE = "gia_xang_previous.json"
 
-def format_number(num):
-    return f"{num:,.0f}".replace(",", ".")
+TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 
+# =====================================================
+# TELEGRAM
+# =====================================================
 
-def get_icon(value):
-    if value > 0:
-        return "📈 +"
-    elif value < 0:
-        return "📉 "
-    else:
-        return "➖ "
+def send_telegram(message):
 
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-# ============================================================
-# LƯU GIÁ LẦN TRƯỚC
-# ============================================================
-
-def load_previous_prices():
-
-    default_data = {
-        "sjc_buy": 0,
-        "sjc_sell": 0,
-        "ring_buy": 0,
-        "ring_sell": 0,
-        "xau": 0,
-        "xag": 0,
-        "time": ""
+    data = {
+        "chat_id": CHAT_ID,
+        "text": message
     }
 
     try:
-        if os.path.exists(DATA_FILE):
+        r = requests.post(url, data=data, timeout=20)
 
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-                for key in default_data:
-                    if key not in data:
-                        data[key] = default_data[key]
-
-                return data
+        if r.status_code == 200:
+            print("Telegram: OK")
+        else:
+            print("Telegram lỗi:", r.text)
 
     except Exception as e:
-        print(f"⚠️ Không đọc được file giá cũ: {e}")
-
-    return default_data
+        print("Lỗi Telegram:", e)
 
 
-def save_previous_prices(prices):
+# =====================================================
+# ĐỌC GIÁ KỲ TRƯỚC
+# =====================================================
 
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(prices, f, ensure_ascii=False, indent=4)
+def load_previous():
 
-        print("💾 Đã lưu giá hiện tại")
-
-    except Exception as e:
-        print(f"⚠️ Không lưu được giá: {e}")
-
-
-# ============================================================
-# LẤY GIÁ TỪ VANG.TODAY
-# ============================================================
-
-def get_vang_today(type_code):
+    if not os.path.exists(DATA_FILE):
+        return None
 
     try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
 
-        url = (
-            "https://www.vang.today/api/prices"
-            f"?type={type_code}"
-            "&action=current"
-        )
+    except:
+        return None
 
-        headers = {
-            "User-Agent": "Mozilla/5.0"
-        }
 
-        response = requests.get(
+# =====================================================
+# LƯU GIÁ KỲ HIỆN TẠI
+# =====================================================
+
+def save_current(data):
+
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# =====================================================
+# TÍNH TĂNG GIẢM
+# =====================================================
+
+def change(current, previous):
+
+    if previous is None or previous == 0:
+        return 0, 0
+
+    diff = current - previous
+    percent = (diff / previous) * 100
+
+    return diff, percent
+
+
+def format_change(diff, percent):
+
+    if diff > 0:
+        return f"🔺 +{diff:,.0f} đ (+{percent:.2f}%)"
+
+    elif diff < 0:
+        return f"🔻 {diff:,.0f} đ ({percent:.2f}%)"
+
+    else:
+        return "➡️ 0 đ (0.00%)"
+
+
+# =====================================================
+# LẤY GIÁ XĂNG DẦU TRONG NƯỚC
+# =====================================================
+
+def get_domestic_prices():
+
+    # Nguồn dữ liệu
+    url = "https://www.pvoil.com.vn/tin-gia-xang-dau"
+
+    headers = {
+        "User-Agent":
+        "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
+    }
+
+    try:
+
+        r = requests.get(
             url,
             headers=headers,
             timeout=20
         )
 
-        print(
-            f"🌐 API {type_code}: "
-            f"HTTP {response.status_code}"
-        )
+        html = r.text
 
-        if response.status_code != 200:
-            return None
+        # Tìm giá dựa trên tên sản phẩm
+        import re
 
-        data = response.json()
+        def find_price(keyword):
 
-        # ----------------------------------------------------
-        # API hiện tại:
-        #
-        # {
-        #   "success": true,
-        #   "data": [
-        #       {
-        #           "type_code": "SJL1L10",
-        #           "buy": 147000000,
-        #           "sell": 150000000
-        #       }
-        #   ]
-        # }
-        # ----------------------------------------------------
+            pattern = rf"{keyword}.*?([\d,.]+)\s*(?:đ|VNĐ)"
+            match = re.search(
+                pattern,
+                html,
+                re.IGNORECASE | re.DOTALL
+            )
 
-        if isinstance(data, dict):
+            if not match:
+                return None
 
-            if isinstance(data.get("data"), list):
+            value = match.group(1)
 
-                if len(data["data"]) > 0:
+            value = value.replace(".", "")
+            value = value.replace(",", "")
 
-                    item = data["data"][0]
+            try:
+                return float(value)
+            except:
+                return None
 
-                    if (
-                        "buy" in item
-                        and "sell" in item
-                    ):
-                        return item
+        e10 = find_price("E10 RON 95")
+        e5 = find_price("E5 RON 92")
+        diesel = find_price("DO 0,05S")
 
-            # Trường hợp API trả trực tiếp object
-            if (
-                "buy" in data
-                and "sell" in data
-            ):
-                return data
+        # Nếu PVOIL thay đổi giao diện,
+        # dùng giá dự phòng từ nguồn công khai.
+        if not e10:
+            e10 = get_from_vnexpress("E10")
 
-        # Trường hợp API trả trực tiếp list
-        if isinstance(data, list):
+        if not e5:
+            e5 = get_from_vnexpress("E5")
 
-            if len(data) > 0:
-                return data[0]
+        if not diesel:
+            diesel = get_from_vnexpress("Diesel")
 
-        print(f"⚠️ Không tìm thấy giá {type_code}")
+        if not e10 or not e5 or not diesel:
+            raise Exception("Không lấy được đủ giá xăng dầu")
 
-        return None
+        return {
+            "e10": e10,
+            "e5": e5,
+            "diesel": diesel
+        }
 
     except Exception as e:
 
-        print(
-            f"❌ Lỗi API {type_code}: {e}"
-        )
+        print("Lỗi lấy giá trong nước:", e)
 
-        return None
+        return get_backup_prices()
 
 
-# ============================================================
-# LẤY GIÁ VÀNG
-# ============================================================
+# =====================================================
+# NGUỒN DỰ PHÒNG
+# =====================================================
 
-def get_gold_prices():
-
-    print("\n==============================")
-    print("🔄 ĐANG LẤY GIÁ VÀNG")
-    print("==============================")
-
-    previous = load_previous_prices()
-
-    # --------------------------------------------------------
-    # 1. VÀNG MIẾNG SJC
-    # --------------------------------------------------------
-
-    sjc = get_vang_today("SJL1L10")
-
-    if sjc:
-
-        sjc_buy = int(
-            float(sjc.get("buy", 0)) / 10
-        )
-
-        sjc_sell = int(
-            float(sjc.get("sell", 0)) / 10
-        )
-
-        print(
-            f"🇻🇳 SJC 9999:"
-            f" Mua {format_number(sjc_buy)}"
-            f" - Bán {format_number(sjc_sell)} đ/chỉ"
-        )
-
-    else:
-
-        sjc_buy = previous["sjc_buy"]
-        sjc_sell = previous["sjc_sell"]
-
-        print("⚠️ SJC lỗi → giữ giá lần trước")
-
-
-    # --------------------------------------------------------
-    # 2. VÀNG NHẪN SJC
-    # --------------------------------------------------------
-
-    ring = get_vang_today("SJ9999")
-
-    if ring:
-
-        ring_buy = int(
-            float(ring.get("buy", 0)) / 10
-        )
-
-        ring_sell = int(
-            float(ring.get("sell", 0)) / 10
-        )
-
-        print(
-            f"💍 Nhẫn SJC:"
-            f" Mua {format_number(ring_buy)}"
-            f" - Bán {format_number(ring_sell)} đ/chỉ"
-        )
-
-    else:
-
-        ring_buy = previous["ring_buy"]
-        ring_sell = previous["ring_sell"]
-
-        print("⚠️ Nhẫn SJC lỗi → giữ giá lần trước")
-
-
-    # --------------------------------------------------------
-    # 3. VÀNG THẾ GIỚI XAU/USD
-    # --------------------------------------------------------
-
-    xau_data = get_vang_today("XAUUSD")
-
-    if xau_data:
-
-        xau_price = float(
-            xau_data.get(
-                "buy",
-                xau_data.get("sell", 0)
-            )
-        )
-
-        print(
-            f"🌎 XAU/USD: "
-            f"{xau_price:.2f} USD/oz"
-        )
-
-    else:
-
-        xau_price = previous["xau"]
-
-        print(
-            "⚠️ XAU lỗi → giữ giá lần trước"
-        )
-
-
-    # --------------------------------------------------------
-    # 4. BẠC THẾ GIỚI
-    # --------------------------------------------------------
-
-    xag_price = 0
+def get_from_vnexpress(keyword):
 
     try:
 
-        response = requests.get(
-            "https://api.gold-api.com/price/XAG",
-            headers={
-                "User-Agent": "Mozilla/5.0"
-            },
-            timeout=15
+        url = "https://vnexpress.net/chu-de/gia-xang-dau-3026"
+
+        headers = {
+            "User-Agent":
+            "Mozilla/5.0 (Android 10) AppleWebKit/537.36 Chrome/120"
+        }
+
+        html = requests.get(
+            url,
+            headers=headers,
+            timeout=20
+        ).text
+
+        import re
+
+        if keyword == "E10":
+            pattern = r"E10.*?([\d.]{4,7})"
+
+        elif keyword == "E5":
+            pattern = r"E5.*?([\d.]{4,7})"
+
+        else:
+            pattern = r"Diesel.*?([\d.]{4,7})"
+
+        m = re.search(
+            pattern,
+            html,
+            re.IGNORECASE | re.DOTALL
         )
 
-        if response.status_code == 200:
+        if m:
 
-            data = response.json()
+            value = m.group(1)
 
-            xag_price = float(
-                data.get("price", 0)
-            )
+            value = value.replace(".", "")
 
-        print(
-            f"🥈 XAG/USD: "
-            f"{xag_price:.2f} USD/oz"
-        )
+            return float(value)
 
-    except Exception as e:
+    except:
+        pass
 
-        print(
-            f"⚠️ Lỗi lấy bạc: {e}"
-        )
+    return None
 
 
-    if xag_price == 0:
+def get_backup_prices():
 
-        xag_price = previous["xag"]
-
-
-    # --------------------------------------------------------
-    # KIỂM TRA
-    # --------------------------------------------------------
-
-    if sjc_buy <= 0 or sjc_sell <= 0:
-
-        print("❌ Không có giá SJC hợp lệ")
-
-        return None
-
-
-    if ring_buy <= 0 or ring_sell <= 0:
-
-        print("❌ Không có giá nhẫn hợp lệ")
-
-        return None
-
-
+    # Không tự ý dùng giá cũ nếu API lỗi.
+    # Trả về None để bot báo lỗi rõ ràng.
     return {
-        "sjc_buy": sjc_buy,
-        "sjc_sell": sjc_sell,
-
-        "ring_buy": ring_buy,
-        "ring_sell": ring_sell,
-
-        "xau": round(xau_price, 2),
-        "xag": round(xag_price, 2)
+        "e10": None,
+        "e5": None,
+        "diesel": None
     }
 
 
-# ============================================================
-# TÍNH TĂNG GIẢM
-# ============================================================
+# =====================================================
+# GIÁ DẦU THẾ GIỚI
+# =====================================================
 
-def calc_change(current, previous):
+def get_oil_price(name):
 
-    if previous <= 0:
-        return 0, 0
-
-    change = current - previous
-
-    percent = (
-        change / previous
-    ) * 100
-
-    return change, percent
-
-
-# ============================================================
-# GỬI TELEGRAM
-# ============================================================
-
-def send_telegram_message(text):
-
-    if not BOT_TOKEN:
-        print("❌ Chưa có BOT_TOKEN")
-        return False
-
-    if not CHAT_ID:
-        print("❌ Chưa có CHAT_ID")
-        return False
+    if not API_NINJAS_KEY:
+        return None
 
     url = (
-        f"https://api.telegram.org/"
-        f"bot{BOT_TOKEN}/sendMessage"
+        "https://api.api-ninjas.com/v1/commodityprice"
+        f"?name={name}"
     )
 
-    data = {
-        "chat_id": CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML"
+    headers = {
+        "X-Api-Key": API_NINJAS_KEY
     }
 
     try:
 
-        response = requests.post(
+        r = requests.get(
             url,
-            data=data,
+            headers=headers,
             timeout=20
         )
 
-        result = response.json()
+        if r.status_code != 200:
+            print("Oil API:", r.text)
+            return None
 
-        if result.get("ok"):
+        data = r.json()
 
-            print("✅ Telegram gửi thành công")
-
-            return True
-
-        print(
-            f"❌ Telegram lỗi: {result}"
-        )
-
-        return False
+        return float(data["price"])
 
     except Exception as e:
 
-        print(
-            f"❌ Lỗi gửi Telegram: {e}"
+        print("Lỗi giá dầu:", e)
+
+        return None
+
+
+# =====================================================
+# TẠO TIN NHẮN
+# =====================================================
+
+def make_message():
+
+    now = datetime.now(TIMEZONE)
+
+    domestic = get_domestic_prices()
+
+    previous = load_previous()
+
+    # -------------------------------
+    # GIÁ TRONG NƯỚC
+    # -------------------------------
+
+    e10 = domestic["e10"]
+    e5 = domestic["e5"]
+    diesel = domestic["diesel"]
+
+    text = (
+        "⛽ GIÁ XĂNG DẦU\n"
+        f"📅 {now.strftime('%d/%m/%Y %H:%M')}\n\n"
+        "🇻🇳 GIÁ TRONG NƯỚC\n"
+    )
+
+    if e10:
+
+        old = previous.get("e10") if previous else None
+        diff, pct = change(e10, old)
+
+        text += (
+            f"⛽ E10 RON95: {e10:,.0f} đ/lít\n"
+            f"   {format_change(diff, pct)}\n\n"
         )
 
-        return False
+    else:
+        text += "⛽ E10 RON95: ❌ Không lấy được giá\n\n"
 
+    if e5:
 
-# ============================================================
-# MAIN
-# ============================================================
+        old = previous.get("e5") if previous else None
+        diff, pct = change(e5, old)
 
-def main():
-
-    print("\n")
-    print("====================================")
-    print("       GIÁ VÀNG TỰ ĐỘNG")
-    print("====================================")
-
-    prices = get_gold_prices()
-
-    if not prices:
-
-        send_telegram_message(
-            "⚠️ <b>GIÁ VÀNG</b>\n\n"
-            "❌ Không lấy được dữ liệu giá."
+        text += (
+            f"⛽ E5 RON92: {e5:,.0f} đ/lít\n"
+            f"   {format_change(diff, pct)}\n\n"
         )
+
+    else:
+        text += "⛽ E5 RON92: ❌ Không lấy được giá\n\n"
+
+    if diesel:
+
+        old = previous.get("diesel") if previous else None
+        diff, pct = change(diesel, old)
+
+        text += (
+            f"🛢️ Dầu Diesel: {diesel:,.0f} đ/lít\n"
+            f"   {format_change(diff, pct)}\n\n"
+        )
+
+    else:
+        text += "🛢️ Dầu Diesel: ❌ Không lấy được giá\n\n"
+
+    # -------------------------------
+    # DẦU THẾ GIỚI
+    # -------------------------------
+
+    brent = get_oil_price("brent_crude_oil")
+    wti = get_oil_price("crude_oil")
+
+    text += "🌎 DẦU THẾ GIỚI\n"
+
+    if brent:
+
+        brent_vnd = brent * USD_VND
+
+        old = previous.get("brent") if previous else None
+
+        if old:
+            diff, pct = change(brent, old)
+
+            text += (
+                f"Brent: ${brent:.2f}/thùng\n"
+                f"≈ {brent_vnd:,.0f} đ/thùng\n"
+                f"   {format_change(diff * USD_VND, pct)}\n\n"
+            )
+
+        else:
+
+            text += (
+                f"Brent: ${brent:.2f}/thùng\n"
+                f"≈ {brent_vnd:,.0f} đ/thùng\n\n"
+            )
+
+    else:
+        text += "Brent: ❌ Không lấy được giá\n\n"
+
+    if wti:
+
+        wti_vnd = wti * USD_VND
+
+        old = previous.get("wti") if previous else None
+
+        if old:
+            diff, pct = change(wti, old)
+
+            text += (
+                f"WTI: ${wti:.2f}/thùng\n"
+                f"≈ {wti_vnd:,.0f} đ/thùng\n"
+                f"   {format_change(diff * USD_VND, pct)}\n\n"
+            )
+
+        else:
+
+            text += (
+                f"WTI: ${wti:.2f}/thùng\n"
+                f"≈ {wti_vnd:,.0f} đ/thùng\n\n"
+            )
+
+    else:
+        text += "WTI: ❌ Không lấy được giá\n\n"
+
+    # -------------------------------
+    # THÔNG TIN KỲ
+    # -------------------------------
+
+    if now.hour < 12:
+        period = "KỲ 08:30"
+    else:
+        period = "KỲ 15:30"
+
+    text += (
+        "━━━━━━━━━━━━━━\n"
+        f"🕐 {period}\n"
+        "📊 So sánh với kỳ cập nhật trước\n"
+    )
+
+    # -------------------------------
+    # LƯU GIÁ
+    # -------------------------------
+
+    save_data = {
+        "time": now.isoformat(),
+        "e10": e10,
+        "e5": e5,
+        "diesel": diesel,
+        "brent": brent,
+        "wti": wti
+    }
+
+    save_current(save_data)
+
+    return text
+
+
+# =====================================================
+# CHẠY BOT
+# =====================================================
+
+def run_bot():
+
+    print("Đang cập nhật giá...")
+
+    if not BOT_TOKEN or not CHAT_ID:
+
+        print("❌ Chưa cấu hình BOT_TOKEN hoặc CHAT_ID")
 
         return
 
+    message = make_message()
 
-    # --------------------------------------------------------
-    # GIÁ LẦN TRƯỚC
-    # --------------------------------------------------------
+    print(message)
 
-    previous = load_previous_prices()
+    send_telegram(message)
 
-    has_previous = (
-        previous["sjc_buy"] > 0
-        and previous["sjc_sell"] > 0
-    )
 
-
-    # --------------------------------------------------------
-    # THỜI GIAN
-    # --------------------------------------------------------
-
-    now = datetime.datetime.now()
-
-    now_text = now.strftime(
-        "%d/%m/%Y %H:%M:%S"
-    )
-
-
-    # --------------------------------------------------------
-    # TÍNH THAY ĐỔI SJC
-    # --------------------------------------------------------
-
-    sjc_buy_change, sjc_buy_pct = calc_change(
-        prices["sjc_buy"],
-        previous["sjc_buy"]
-    )
-
-    sjc_sell_change, sjc_sell_pct = calc_change(
-        prices["sjc_sell"],
-        previous["sjc_sell"]
-    )
-
-
-    # --------------------------------------------------------
-    # TÍNH THAY ĐỔI NHẪN
-    # --------------------------------------------------------
-
-    ring_buy_change, ring_buy_pct = calc_change(
-        prices["ring_buy"],
-        previous["ring_buy"]
-    )
-
-    ring_sell_change, ring_sell_pct = calc_change(
-        prices["ring_sell"],
-        previous["ring_sell"]
-    )
-
-
-    # --------------------------------------------------------
-    # TÍNH THAY ĐỔI XAU
-    # --------------------------------------------------------
-
-    xau_change, xau_pct = calc_change(
-        prices["xau"],
-        previous["xau"]
-    )
-
-
-    # --------------------------------------------------------
-    # TÍNH THAY ĐỔI XAG
-    # --------------------------------------------------------
-
-    xag_change, xag_pct = calc_change(
-        prices["xag"],
-        previous["xag"]
-    )
-
-
-    # ========================================================
-    # TẠO TIN NHẮN
-    # ========================================================
-
-    msg = (
-        "🌍 <b>GIÁ VÀNG & BẠC HÀNG NGÀY</b> 🌍\n"
-        f"🕒 {now_text}\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-    )
-
-
-    # ========================================================
-    # SJC
-    # ========================================================
-
-    msg += (
-        "🇻🇳 <b>VÀNG MIẾNG SJC 9999</b>\n"
-        f"💰 Giá Mua Vào: "
-        f"<b>{format_number(prices['sjc_buy'])}</b> VNĐ/chỉ\n"
-    )
-
-    if has_previous:
-
-        msg += (
-            f"{get_icon(sjc_buy_change)}"
-            f"{format_number(sjc_buy_change)} VNĐ "
-            f"({sjc_buy_pct:+.2f}%)\n"
-        )
-
-
-    msg += (
-        f"💰 Giá Bán Ra: "
-        f"<b>{format_number(prices['sjc_sell'])}</b> VNĐ/chỉ\n"
-    )
-
-    if has_previous:
-
-        msg += (
-            f"{get_icon(sjc_sell_change)}"
-            f"{format_number(sjc_sell_change)} VNĐ "
-            f"({sjc_sell_pct:+.2f}%)\n"
-        )
-
-
-    msg += (
-        "\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    )
-
-
-    # ========================================================
-    # NHẪN SJC
-    # ========================================================
-
-    msg += (
-        "💍 <b>VÀNG NHẪN SJC 9999</b>\n"
-        f"💰 Giá Mua Vào: "
-        f"<b>{format_number(prices['ring_buy'])}</b> VNĐ/chỉ\n"
-    )
-
-    if has_previous:
-
-        msg += (
-            f"{get_icon(ring_buy_change)}"
-            f"{format_number(ring_buy_change)} VNĐ "
-            f"({ring_buy_pct:+.2f}%)\n"
-        )
-
-
-    msg += (
-        f"💰 Giá Bán Ra: "
-        f"<b>{format_number(prices['ring_sell'])}</b> VNĐ/chỉ\n"
-    )
-
-    if has_previous:
-
-        msg += (
-            f"{get_icon(ring_sell_change)}"
-            f"{format_number(ring_sell_change)} VNĐ "
-            f"({ring_sell_pct:+.2f}%)\n"
-        )
-
-
-    msg += (
-        "\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    )
-
-
-    # ========================================================
-    # THỊ TRƯỜNG THẾ GIỚI
-    # ========================================================
-
-    msg += (
-        "🌐 <b>THỊ TRƯỜNG THẾ GIỚI</b>\n"
-        f"📊 Vàng XAU/USD: "
-        f"<b>{prices['xau']:.2f}</b> USD/oz\n"
-    )
-
-    if has_previous:
-
-        msg += (
-            f"{get_icon(xau_change)}"
-            f"{xau_change:+.2f} USD "
-            f"({xau_pct:+.2f}%)\n"
-        )
-
-
-    msg += (
-        f"📊 Bạc XAG/USD: "
-        f"<b>{prices['xag']:.2f}</b> USD/oz\n"
-    )
-
-    if has_previous:
-
-        msg += (
-            f"{get_icon(xag_change)}"
-            f"{xag_change:+.2f} USD "
-            f"({xag_pct:+.2f}%)\n"
-        )
-
-
-    msg += (
-        "\n━━━━━━━━━━━━━━━━━━━━\n"
-        "🔄 <b>Cập nhật mỗi 1 giờ</b>\n"
-        "📡 Nguồn: Vang.Today API\n"
-    )
-
-
-    # ========================================================
-    # GỬI TELEGRAM
-    # ========================================================
-
-    send_telegram_message(msg)
-
-
-    # ========================================================
-    # LƯU GIÁ
-    # ========================================================
-
-    prices_to_save = {
-        "sjc_buy": prices["sjc_buy"],
-        "sjc_sell": prices["sjc_sell"],
-
-        "ring_buy": prices["ring_buy"],
-        "ring_sell": prices["ring_sell"],
-
-        "xau": prices["xau"],
-        "xag": prices["xag"],
-
-        "time": now_text
-    }
-
-    save_previous_prices(
-        prices_to_save
-    )
-
-
-    print("\n====================================")
-    print("✅ HOÀN TẤT")
-    print("====================================")
-
-
-# ============================================================
-# CHẠY CHƯƠNG TRÌNH
-# ============================================================
+# =====================================================
+# MAIN
+# =====================================================
 
 if __name__ == "__main__":
-    main()
+
+    run_bot()
